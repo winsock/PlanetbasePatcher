@@ -42,6 +42,8 @@
     <Reference Include="Mono.Cecil.Rocks">
       <HintPath>..\packages\Mono.Cecil.0.9.6.1\lib\net35\Mono.Cecil.Rocks.dll</HintPath>
     </Reference>
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
@@ -50,7 +52,18 @@
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
     <None Include="packages.config" />
-    <None Include="Resources\ClassesToHook.xml" />
-    <None Include="Resources\ClassesToHook.xsd" />
+    <None Include="bin\Debug\Assembly-CSharp.patched.dll">
+      <Link>Assembly-CSharp.patched.dll</Link>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\ClassesToHook.xml" />
+    <EmbeddedResource Include="Resources\ClassesToHook.xsd" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PlanetbasePatch\PlanetbasePatch.csproj">
+      <Project>{7C178409-F67B-4435-B891-9CC4EB1B6392}</Project>
+      <Name>PlanetbasePatch</Name>
+    </ProjectReference>
   </ItemGroup>
 </Project>
