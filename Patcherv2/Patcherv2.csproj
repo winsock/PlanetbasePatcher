@@ -50,5 +50,7 @@
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="Resources\ClassesToHook.xml" />
+    <None Include="Resources\ClassesToHook.xsd" />
   </ItemGroup>
 </Project>
