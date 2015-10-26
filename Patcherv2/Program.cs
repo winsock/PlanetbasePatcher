@@ -21,6 +21,11 @@ namespace Patcherv2
 		private XmlSchemaSet schemaSet = new XmlSchemaSet();
 		private System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
 
+		private MethodReference onUpdate2Arg;
+		private MethodReference onUpdate1Arg;
+		private MethodReference onTick2Arg;
+		private MethodReference onTick1Arg;
+
 		public static void Main (string[] args) {
 			new MainClass ();
 		}
@@ -40,6 +45,12 @@ namespace Patcherv2
 
 			patchAssembly = ModuleDefinition.ReadModule (AppDomain.CurrentDomain.BaseDirectory + @"PlanetbasePatch.dll", new ReaderParameters { AssemblyResolver = assemblies }); 
 			gameManager = assemblyModule.Types.FirstOrDefault (t => t.FullName == "Planetbase.GameManager");
+	
+			onUpdate2Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onUpdate" && m.Parameters.Count == 2));
+			onUpdate1Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onUpdate" && m.Parameters.Count == 1));
+	
+			onTick2Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onTick" && m.Parameters.Count == 2));
+			onTick1Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onTick" && m.Parameters.Count == 1));
 
 			AddPublicInstanceField ();
 			hookUpdateOrTickMethods ();
@@ -63,66 +74,79 @@ namespace Patcherv2
 				}
 			}, true);
 
-			MethodReference onUpdate2Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onUpdate" && m.Parameters.Count == 2));
-			MethodReference onUpdate1Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onUpdate" && m.Parameters.Count == 1));
-
-			MethodReference onTick2Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onTick" && m.Parameters.Count == 2));
-			MethodReference onTick1Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onTick" && m.Parameters.Count == 1));
 
 			var planetbaseHookVersion = classesToHook.Root.Elements ().First (e => e.Attribute("name").Value == "Planetbase" && e.Attribute ("version").Value == versionString);
 			foreach (XElement gameClass in planetbaseHookVersion.Elements()) {
-				TypeDefinition typeDef = assemblyModule.Types.FirstOrDefault(t => t.FullName == "Planetbase." + gameClass.Attribute("name").Value);
-				if (typeDef == null) {
-					Console.WriteLine("Error finding class: Planetbase." + gameClass.Attribute("name").Value);
-					Console.WriteLine ("Skipping class");
-					continue;
-				}
-
-				MethodDefinition updateMethod = typeDef.Methods.FirstOrDefault (m => m.Name == "update");
-				MethodDefinition tickMethod = typeDef.Methods.FirstOrDefault (m => m.Name == "tick");
-				if (tickMethod == null && updateMethod == null) {
-					continue;
-				}
-
-				if (updateMethod != null && !updateMethod.IsStatic) {
-					ILProcessor updateIL = updateMethod.Body.GetILProcessor ();
-
-					var loadField = updateIL.Create (OpCodes.Ldsfld, loaderInstanceField);
-					var loadThis = updateIL.Create (OpCodes.Ldarg_0);
-					var loadTimeStep = updateIL.Create (OpCodes.Ldarg_1);
-					var callUpdate = updateIL.Create (OpCodes.Call, (updateMethod.Parameters.Count != 1 || updateMethod.Parameters[0].ParameterType.MetadataType != MetadataType.Single) ? onUpdate1Arg : onUpdate2Arg);
-					var branch = updateIL.Create (OpCodes.Brtrue, updateMethod.Body.Instructions.Last());
-
-					updateIL.InsertBefore (updateMethod.Body.Instructions.First (), loadField);
-					updateIL.InsertAfter (loadField, loadThis);
-					if (updateMethod.Parameters.Count == 1 && updateMethod.Parameters[0].ParameterType.MetadataType == MetadataType.Single) {
-						updateIL.InsertAfter (loadThis, loadTimeStep);
-						updateIL.InsertAfter (loadTimeStep, callUpdate);
-					} else {
-						updateIL.InsertAfter (loadThis, callUpdate);
+				
+				if (gameClass.Attribute ("matchAll") != null && Boolean.Parse (gameClass.Attribute ("matchAll").Value)) {
+					// So I can be lazy and not manually add each module type to the xml file. My hand was getting sore...
+					foreach (TypeDefinition typeDef in assemblyModule.Types.Where(t => t.FullName.StartsWith("Planetbase." + gameClass.Attribute ("name").Value))) {
+						if (typeDef == null) {
+							Console.WriteLine("Error finding class: Planetbase." + gameClass.Attribute("name").Value);
+							Console.WriteLine ("Skipping class");
+							continue;
+						}
+						processType (typeDef);
 					}
-					updateIL.InsertAfter (callUpdate, branch);
-				}
-
-				if (tickMethod != null && !tickMethod.IsStatic) {
-					ILProcessor tickIl = tickMethod.Body.GetILProcessor ();
-
-					var loadField = tickIl.Create (OpCodes.Ldsfld, loaderInstanceField);
-					var loadThis = tickIl.Create (OpCodes.Ldarg_0);
-					var loadTimeStep = tickIl.Create (OpCodes.Ldarg_1);
-					var callTick = tickIl.Create (OpCodes.Call, (tickMethod.Parameters.Count != 1 || tickMethod.Parameters[0].ParameterType.MetadataType != MetadataType.Single) ? onTick1Arg : onTick2Arg);
-					var branch = tickIl.Create (OpCodes.Brtrue, tickMethod.Body.Instructions.Last());
-
-					tickIl.InsertBefore (tickMethod.Body.Instructions.First (), loadField);
-					tickIl.InsertAfter (loadField, loadThis);
-					if (tickMethod.Parameters.Count == 1 && tickMethod.Parameters[0].ParameterType.MetadataType == MetadataType.Single) {
-						tickIl.InsertAfter (loadThis, loadTimeStep);
-						tickIl.InsertAfter (loadTimeStep, callTick);
-					} else {
-						tickIl.InsertAfter (loadThis, callTick);
+				} else {
+					TypeDefinition typeDef = assemblyModule.Types.FirstOrDefault (t => t.FullName == "Planetbase." + gameClass.Attribute ("name").Value);
+					if (typeDef == null) {
+						Console.WriteLine("Error finding class: Planetbase." + gameClass.Attribute("name").Value);
+						Console.WriteLine ("Skipping class");
+						continue;
 					}
-					tickIl.InsertAfter (callTick, branch);
+					processType (typeDef);
 				}
+			}
+		}
+
+		private void processType(TypeDefinition typeDef) {
+			
+
+			MethodDefinition updateMethod = typeDef.Methods.FirstOrDefault (m => m.Name == "update");
+			MethodDefinition tickMethod = typeDef.Methods.FirstOrDefault (m => m.Name == "tick");
+			if (tickMethod == null && updateMethod == null) {
+				return;
+			}
+
+			if (updateMethod != null && !updateMethod.IsStatic) {
+				ILProcessor updateIL = updateMethod.Body.GetILProcessor ();
+
+				var loadField = updateIL.Create (OpCodes.Ldsfld, loaderInstanceField);
+				var loadThis = updateIL.Create (OpCodes.Ldarg_0);
+				var loadTimeStep = updateIL.Create (OpCodes.Ldarg_1);
+				var callUpdate = updateIL.Create (OpCodes.Call, (updateMethod.Parameters.Count != 1 || updateMethod.Parameters[0].ParameterType.MetadataType != MetadataType.Single) ? onUpdate1Arg : onUpdate2Arg);
+				var branch = updateIL.Create (OpCodes.Brtrue, updateMethod.Body.Instructions.Last());
+
+				updateIL.InsertBefore (updateMethod.Body.Instructions.First (), loadField);
+				updateIL.InsertAfter (loadField, loadThis);
+				if (updateMethod.Parameters.Count == 1 && updateMethod.Parameters[0].ParameterType.MetadataType == MetadataType.Single) {
+					updateIL.InsertAfter (loadThis, loadTimeStep);
+					updateIL.InsertAfter (loadTimeStep, callUpdate);
+				} else {
+					updateIL.InsertAfter (loadThis, callUpdate);
+				}
+				updateIL.InsertAfter (callUpdate, branch);
+			}
+
+			if (tickMethod != null && !tickMethod.IsStatic) {
+				ILProcessor tickIl = tickMethod.Body.GetILProcessor ();
+
+				var loadField = tickIl.Create (OpCodes.Ldsfld, loaderInstanceField);
+				var loadThis = tickIl.Create (OpCodes.Ldarg_0);
+				var loadTimeStep = tickIl.Create (OpCodes.Ldarg_1);
+				var callTick = tickIl.Create (OpCodes.Call, (tickMethod.Parameters.Count != 1 || tickMethod.Parameters[0].ParameterType.MetadataType != MetadataType.Single) ? onTick1Arg : onTick2Arg);
+				var branch = tickIl.Create (OpCodes.Brtrue, tickMethod.Body.Instructions.Last());
+
+				tickIl.InsertBefore (tickMethod.Body.Instructions.First (), loadField);
+				tickIl.InsertAfter (loadField, loadThis);
+				if (tickMethod.Parameters.Count == 1 && tickMethod.Parameters[0].ParameterType.MetadataType == MetadataType.Single) {
+					tickIl.InsertAfter (loadThis, loadTimeStep);
+					tickIl.InsertAfter (loadTimeStep, callTick);
+				} else {
+					tickIl.InsertAfter (loadThis, callTick);
+				}
+				tickIl.InsertAfter (callTick, branch);
 			}
 		}
 
