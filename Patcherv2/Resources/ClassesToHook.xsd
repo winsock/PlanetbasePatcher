@@ -1,16 +1,27 @@
-<?xml version="1.0" encoding="utf-8"?>
-<xs:schema id="patcher" xmlns="" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
-	<xs:element name="patcher" msdata:IsDataSet="true" msdata:Locale="en-US">
-		<xs:complexType>
-			<xs:choice minOccurs="0" maxOccurs="unbounded">
-				<xs:element name="namespace">
-					<xs:complexType>
-						<xs:attribute name="name" type="xs:string" />
-						<xs:attribute name="version" type="xs:string" />
-						<xs:attribute name="rev" type="xs:string" />
-					</xs:complexType>
-				</xs:element>
-			</xs:choice>
-		</xs:complexType>
-	</xs:element>
+<xs:schema attributeFormDefault="unqualified" elementFormDefault="qualified" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="patcher">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="namespace">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="class" maxOccurs="unbounded" minOccurs="0">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="xs:string">
+                      <xs:attribute type="xs:string" name="name" use="optional"/>
+                      <xs:attribute type="xs:string" name="matchAll" use="optional"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute type="xs:string" name="name"/>
+            <xs:attribute type="xs:string" name="version"/>
+            <xs:attribute type="xs:byte" name="rev"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
 </xs:schema>
