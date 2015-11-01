@@ -6,6 +6,7 @@ using System.Linq;
 
 using System.Xml.Linq;
 using System.Xml.Schema;
+using Mono.Cecil.Rocks;
 
 namespace Patcherv2
 {
@@ -21,10 +22,7 @@ namespace Patcherv2
 		private XmlSchemaSet schemaSet = new XmlSchemaSet();
 		private System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
 
-		private MethodReference onUpdate2Arg;
-		private MethodReference onUpdate1Arg;
-		private MethodReference onTick2Arg;
-		private MethodReference onTick1Arg;
+		private MethodReference callbackRef;
 
 		public static void Main (string[] args) {
 			new MainClass ();
@@ -45,15 +43,10 @@ namespace Patcherv2
 
 			patchAssembly = ModuleDefinition.ReadModule (AppDomain.CurrentDomain.BaseDirectory + @"PlanetbasePatch.dll", new ReaderParameters { AssemblyResolver = assemblies }); 
 			gameManager = assemblyModule.Types.FirstOrDefault (t => t.FullName == "Planetbase.GameManager");
-	
-			onUpdate2Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onUpdate" && m.Parameters.Count == 2));
-			onUpdate1Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onUpdate" && m.Parameters.Count == 1));
-	
-			onTick2Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onTick" && m.Parameters.Count == 2));
-			onTick1Arg = assemblyModule.Import (patchAssembly.Types.FirstOrDefault (t => t.FullName == "PlanetbasePatch.Loader").Methods.FirstOrDefault (m => m.Name == "onTick" && m.Parameters.Count == 1));
+			callbackRef = assemblyModule.Import(typeof(PlanetbasePatch.Loader).GetMethod("methodCallback"));
 
 			AddPublicInstanceField ();
-			hookUpdateOrTickMethods ();
+			hookGameClasses ();
 
 			MethodDefinition gameManagerCtor = gameManager.Methods.First (m => m.IsConstructor);
 			ILProcessor ilProcessor = gameManagerCtor.Body.GetILProcessor ();
@@ -64,7 +57,82 @@ namespace Patcherv2
 			Save ();
 		}
 
-		private void hookUpdateOrTickMethods () {
+		private void modifyClass (XElement classElement) {
+			String classFullName = "Planetbase." + classElement.Attribute ("name").Value;
+			bool parseAllThatStartWithName = classElement.Attribute ("matchAll") != null && Boolean.Parse (classElement.Attribute ("matchAll").Value);
+
+			TypeDefinition typeDef = assemblyModule.Types.FirstOrDefault (t => t.FullName == classFullName);
+			if (typeDef == null) {
+				Console.WriteLine("Error finding class: " + classFullName);
+				Console.WriteLine ("Skipping class");
+				return;
+			}
+
+			// Hook basic methods
+			hookUpdatesAndTicks (typeDef);
+			// Hook explicitly requested methods
+			if (classElement.HasElements) {
+				parseRequestedMethods (classElement.Elements (), typeDef);
+			}
+
+			if (parseAllThatStartWithName) {
+				// Hook any aditional methods that start with the class name
+				foreach (TypeDefinition subClassDef in assemblyModule.Types.Where(t => t.FullName.StartsWith(classFullName) && t.FullName != classFullName)) {
+					hookUpdatesAndTicks (subClassDef);
+					// Hook explicitly requested methods
+					if (classElement.HasElements) {
+						parseRequestedMethods (classElement.Elements (), subClassDef);
+					}
+				}
+			}
+		}
+
+		private void parseRequestedMethods(System.Collections.Generic.IEnumerable<XElement> requestedMethods, TypeDefinition classToHook) {
+			foreach (XElement methodElement in requestedMethods) {
+				String methodName = methodElement.Attribute ("name").Value;
+				String returnTypeString = methodElement.Attribute ("return") == null ? "Void" : methodElement.Attribute ("return").Value;
+				var possibleMethods = classToHook.Methods.Where (m => m.Name == methodName && m.ReturnType.Name == returnTypeString);
+
+				String[] paramTypes = null;
+				if (methodElement.HasElements) {
+					paramTypes = new String[methodElement.Elements ().Count()];
+					for (int i = 0; i < paramTypes.Count(); i++) {
+						paramTypes [i] = methodElement.Elements ().ElementAt (i).Name.ToString();
+					}
+				}
+
+				var possibleMethodArray = possibleMethods as object[] ?? possibleMethods.ToArray ();
+				if (paramTypes == null && possibleMethodArray.Count () > 1) {
+					Console.WriteLine ("Ambigious method: " + methodName + " to hook in class: " + classToHook.FullName);
+					Console.WriteLine ("Skipping method(s)");
+					continue;
+				} else if (!possibleMethodArray.Any ()) {
+					Console.WriteLine ("Unable to find method: " + methodName + " to hook in class: " + classToHook.FullName);
+					Console.WriteLine ("Skipping method");
+					continue;
+				}
+
+				foreach (MethodDefinition possibleMethodToHook in possibleMethodArray) {
+					bool match = true;
+
+					if (possibleMethodToHook.Parameters.Count > 0 && paramTypes != null && possibleMethodToHook.Parameters.Count == paramTypes.Count ()) {
+						for (int i = 0; i < paramTypes.Count(); i++) {
+							if (paramTypes [i] != possibleMethodToHook.Parameters [i].Name) {
+								match = false;
+								break;
+							}
+						}
+					}
+					if (match) {
+						// Found method break stop trying to find a method
+						hookMethod (possibleMethodToHook);
+						break;
+					}
+				}
+			}
+		}
+
+		private void hookGameClasses () {
 			var classesToHook = XDocument.Load (assembly.GetManifestResourceStream ("Patcherv2.Resources.ClassesToHook.xml"));
 			classesToHook.Validate (schemaSet, (sender, e) => {
 				if (e != null) {
@@ -77,76 +145,68 @@ namespace Patcherv2
 
 			var planetbaseHookVersion = classesToHook.Root.Elements ().First (e => e.Attribute("name").Value == "Planetbase" && e.Attribute ("version").Value == versionString);
 			foreach (XElement gameClass in planetbaseHookVersion.Elements()) {
-				
-				if (gameClass.Attribute ("matchAll") != null && Boolean.Parse (gameClass.Attribute ("matchAll").Value)) {
-					// So I can be lazy and not manually add each module type to the xml file. My hand was getting sore...
-					foreach (TypeDefinition typeDef in assemblyModule.Types.Where(t => t.FullName.StartsWith("Planetbase." + gameClass.Attribute ("name").Value))) {
-						if (typeDef == null) {
-							Console.WriteLine("Error finding class: Planetbase." + gameClass.Attribute("name").Value);
-							Console.WriteLine ("Skipping class");
-							continue;
-						}
-						processType (typeDef);
-					}
-				} else {
-					TypeDefinition typeDef = assemblyModule.Types.FirstOrDefault (t => t.FullName == "Planetbase." + gameClass.Attribute ("name").Value);
-					if (typeDef == null) {
-						Console.WriteLine("Error finding class: Planetbase." + gameClass.Attribute("name").Value);
-						Console.WriteLine ("Skipping class");
-						continue;
-					}
-					processType (typeDef);
-				}
+				modifyClass (gameClass);
 			}
 		}
 
-		private void processType(TypeDefinition typeDef) {
-			
+		private void hookMethod(MethodDefinition methodDef) {
+			ILProcessor methodIL = methodDef.Body.GetILProcessor ();
+			var objectArrayLocal = new VariableDefinition ("objectArray", assemblyModule.Import(typeof(Object[])));
+			methodDef.Body.Variables.Add (objectArrayLocal);
 
+			// Three instructions per array element, plus 4 instructions.
+			Instruction[] callbackParamaters = new Instruction[(methodDef.Parameters.Count * 4) + 3];
+			//var branch = updateIL.Create (OpCodes.Brtrue, updateMethod.Body.Instructions.Last());
+
+			callbackParamaters [0] = methodIL.Create (OpCodes.Ldc_I4, methodDef.Parameters.Count);
+			callbackParamaters [1] = methodIL.Create (OpCodes.Newarr, assemblyModule.Import(typeof(Object)));
+			callbackParamaters [2] = methodIL.Create (OpCodes.Stloc, objectArrayLocal);
+
+			for (int i = 0; i < methodDef.Parameters.Count; i++) {
+				// Add five as an offset for the first for instructions.
+				// If non-static we add one to the index of the argument to load since arg.0 is a pointer to "this"
+				// If static the first argument passed to the function starts at arg.0
+				callbackParamaters [((i * 4) + 0) + 3] = methodIL.Create (OpCodes.Ldloc, objectArrayLocal);
+				callbackParamaters [((i * 4) + 1) + 3] = methodIL.Create (OpCodes.Ldc_I4, i);
+				callbackParamaters [((i * 4) + 2) + 3] = methodIL.Create (OpCodes.Ldarg, i + (methodDef.IsStatic ? 0 : 1));
+				callbackParamaters [((i * 4) + 3) + 3] = methodIL.Create (OpCodes.Stelem_Any, methodDef.Parameters[i].ParameterType);
+			}
+
+			Instruction previousInstruction = null;
+			for (int i = 0; i < callbackParamaters.Count(); i++) {
+				if (previousInstruction == null) {
+					methodIL.InsertBefore (methodDef.Body.Instructions.First (), callbackParamaters[i]);
+				} else {
+					methodIL.InsertAfter (previousInstruction, callbackParamaters[i]);
+				}
+				previousInstruction = callbackParamaters[i];
+			}
+			var loadField = methodIL.Create (OpCodes.Ldsfld, loaderInstanceField);
+			var methodDefString = methodIL.Create (OpCodes.Ldstr, methodDef.ToString ());
+			// If static pass null as the object instance.
+			var instance = methodDef.IsStatic ? methodIL.Create (OpCodes.Ldnull) : methodIL.Create (OpCodes.Ldarg_0);
+			var ldLocalArray = methodIL.Create (OpCodes.Ldloc, objectArrayLocal);
+			var callback = methodIL.Create (OpCodes.Call, callbackRef);
+
+			methodIL.InsertAfter (previousInstruction, loadField);
+			methodIL.InsertAfter (loadField, methodDefString);
+			methodIL.InsertAfter (methodDefString, instance);
+			methodIL.InsertAfter (instance, ldLocalArray);
+			methodIL.InsertAfter (ldLocalArray, callback);
+			// Need to pop the return value if not using it.
+			methodIL.InsertAfter (callback, methodIL.Create(OpCodes.Pop));
+
+			methodDef.Body.OptimizeMacros ();
+		}
+
+		private void hookUpdatesAndTicks(TypeDefinition typeDef) {
 			MethodDefinition updateMethod = typeDef.Methods.FirstOrDefault (m => m.Name == "update");
 			MethodDefinition tickMethod = typeDef.Methods.FirstOrDefault (m => m.Name == "tick");
-			if (tickMethod == null && updateMethod == null) {
-				return;
+			if (updateMethod != null) {
+				hookMethod (updateMethod);
 			}
-
-			if (updateMethod != null && !updateMethod.IsStatic) {
-				ILProcessor updateIL = updateMethod.Body.GetILProcessor ();
-
-				var loadField = updateIL.Create (OpCodes.Ldsfld, loaderInstanceField);
-				var loadThis = updateIL.Create (OpCodes.Ldarg_0);
-				var loadTimeStep = updateIL.Create (OpCodes.Ldarg_1);
-				var callUpdate = updateIL.Create (OpCodes.Call, (updateMethod.Parameters.Count != 1 || updateMethod.Parameters[0].ParameterType.MetadataType != MetadataType.Single) ? onUpdate1Arg : onUpdate2Arg);
-				var branch = updateIL.Create (OpCodes.Brtrue, updateMethod.Body.Instructions.Last());
-
-				updateIL.InsertBefore (updateMethod.Body.Instructions.First (), loadField);
-				updateIL.InsertAfter (loadField, loadThis);
-				if (updateMethod.Parameters.Count == 1 && updateMethod.Parameters[0].ParameterType.MetadataType == MetadataType.Single) {
-					updateIL.InsertAfter (loadThis, loadTimeStep);
-					updateIL.InsertAfter (loadTimeStep, callUpdate);
-				} else {
-					updateIL.InsertAfter (loadThis, callUpdate);
-				}
-				updateIL.InsertAfter (callUpdate, branch);
-			}
-
-			if (tickMethod != null && !tickMethod.IsStatic) {
-				ILProcessor tickIl = tickMethod.Body.GetILProcessor ();
-
-				var loadField = tickIl.Create (OpCodes.Ldsfld, loaderInstanceField);
-				var loadThis = tickIl.Create (OpCodes.Ldarg_0);
-				var loadTimeStep = tickIl.Create (OpCodes.Ldarg_1);
-				var callTick = tickIl.Create (OpCodes.Call, (tickMethod.Parameters.Count != 1 || tickMethod.Parameters[0].ParameterType.MetadataType != MetadataType.Single) ? onTick1Arg : onTick2Arg);
-				var branch = tickIl.Create (OpCodes.Brtrue, tickMethod.Body.Instructions.Last());
-
-				tickIl.InsertBefore (tickMethod.Body.Instructions.First (), loadField);
-				tickIl.InsertAfter (loadField, loadThis);
-				if (tickMethod.Parameters.Count == 1 && tickMethod.Parameters[0].ParameterType.MetadataType == MetadataType.Single) {
-					tickIl.InsertAfter (loadThis, loadTimeStep);
-					tickIl.InsertAfter (loadTimeStep, callTick);
-				} else {
-					tickIl.InsertAfter (loadThis, callTick);
-				}
-				tickIl.InsertAfter (callTick, branch);
+			if (tickMethod != null) {
+				hookMethod (tickMethod);
 			}
 		}
 

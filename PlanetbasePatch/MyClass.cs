@@ -10,46 +10,15 @@ namespace PlanetbasePatch
 		}
 
 		/// <summary>
-		/// On each tick calls registered mods and aborts the tick early if requested.
+		/// On each callback call any registered mods.
 		/// </summary>
-		/// <returns><c>true</c>, If requested to abort early, <c>false</c> otherwise.</returns>
-		/// <param name="caller">Caller.</param>
-		/// <param name="timeStep">Time step.</param>
-		public bool onTick(Object caller, float timeStep) {
-			Console.WriteLine ("On tick called from: " + caller);
-			return false;
-		}
-
-		/// <summary>
-		/// On each tick calls registered mods and aborts the tick early if requested.
-		/// </summary>
-		/// <returns><c>true</c>, If requested to abort early, <c>false</c> otherwise.</returns>
-		/// <param name="caller">Caller.</param>
-		public bool onTick(Object caller) {
-			Console.WriteLine ("On tick called from: " + caller);
-			return false;
-		}
-
-		/// <summary>
-		/// On each update calls registered mods and aborts the tick early if requested.
-		/// </summary>
-		/// <returns><c>true</c>, If requested to abort early, <c>false</c> otherwise.</returns>
-		/// <param name="caller">Caller.</param>
-		/// <param name="timeStep">Time step.</param>
-		public bool onUpdate(Object caller, float timeStep) {
-			Console.WriteLine ("On update called from: " + caller);
-			return false;
-		}
-
-		/// <summary>
-		/// On each update calls registered mods and aborts the tick early if requested.
-		/// </summary>
-		/// <returns><c>true</c>, If requested to abort early, <c>false</c> otherwise.</returns>
-		/// <param name="caller">Caller.</param>
-		public bool onUpdate(Object caller) {
-			Console.WriteLine ("On update called from: " + caller);
+		/// <returns></returns>
+		/// <param name="methodSig">Method signature</param>
+		/// <param name="caller">Caller</param>
+		/// <param name = "args"></param>
+		public Object methodCallback(String methodSig, Object caller, params Object[] args) {
+			Console.WriteLine ("Method callback called from: " + methodSig + " with " + args.Length + " arguments");
 			return false;
 		}
 	}
 }
-
